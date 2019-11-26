@@ -1,0 +1,197 @@
+#!/usr/bin/env bash
+
+# this file should be the only file required to install everything.
+# It will clone the entire project and run it
+
+set -euo pipefail
+IFS=$'\n\t'
+
+declare TMP_DIR=""
+declare ZIP_FILE=""
+
+function clean_workspace
+{
+    if [[ -n "$TMP_DIR" ]] && [[ -d "$TMP_DIR" ]]
+    then
+        rm -r "$TMP_DIR"
+    fi
+
+    if [[ -f "$ZIP_FILE" ]]
+    then
+    	rm "$ZIP_FILE"
+    fi
+}
+
+# using this is prettier/cleaner than removing the directory at the end because many errors can occurs
+trap clean_workspace EXIT
+
+function os_not_supported
+{
+	>&2 cat <<EOF
+Your operating system is not handled by this script.
+
+Chances are that your distribution is already managed but not for this release.
+In that case, it might be easy to make this script compatible.
+EOF
+}
+
+function zip_download_failed
+{
+	>&2 cat <<EOF
+Something went wrong while downloading archive containing scripts that match
+your operating system version.
+Try again later.
+EOF
+}
+
+function missing_lsb_release_binary
+{
+	>&2 cat <<EOF
+This script relies on the lsb_release binary to detect your operating system's
+name and version.
+Installing this binary won't fix the issue because your operating system is
+probably not supported yet.
+EOF
+}
+
+function missing_unzip_binary
+{
+	>&2 cat <<EOF
+This script relies on the unzip binary to unarchive all the scripts specific to
+your operating system.
+Please install it with your package manager.
+EOF
+}
+
+function missing_network_downloader
+{
+	>&2 cat <<EOF
+	Your operating system does not have wget nor curl. Please install one of this binary.
+EOF
+}
+
+function main
+{
+	check_binary_requirements
+
+	declare os_name os_release
+	os_name="$(lsb_release --short --id | tr '[:upper:]' '[:lower:]')"
+	os_release="$(lsb_release --short --release | tr '[:upper:]' '[:lower:]')"
+
+	declare zip_url="https://github.com/juliendufresne/install/archive/${os_name}-${os_release}.zip"
+	declare github_tree="https://github.com/juliendufresne/install/tree/${os_name}-${os_release}"
+
+	TMP_DIR="$(mktemp -d)"
+	ZIP_FILE="${TMP_DIR}.zip"
+
+	download_branch_archive "$zip_url" "$ZIP_FILE"
+	extract_archive "$ZIP_FILE" "$TMP_DIR"
+	run_script "$TMP_DIR/all" "$github_tree"
+}
+
+function check_binary_requirements
+{
+
+	declare MET_REQUIREMENTS=true
+
+	if ! hash lsb_release &>/dev/null
+	then
+	    missing_lsb_release_binary
+	    MET_REQUIREMENTS=false
+	fi
+
+	if ! hash unzip &>/dev/null
+	then
+	    missing_unzip_binary
+	    MET_REQUIREMENTS=false
+	fi
+
+	if ! hash wget &>/dev/null && ! hash curl &>/dev/null
+	then
+		missing_network_downloader
+	    MET_REQUIREMENTS=false
+	fi
+
+	$MET_REQUIREMENTS
+}
+
+function download_branch_archive
+{
+	declare -r url="$1" destination="$2"
+
+	if hash wget &>/dev/null
+	then
+		# check that url exists
+		if ! wget --quiet --spider "$url"
+		then
+			os_not_supported
+			false
+
+			return
+		fi
+		# download content
+		if ! wget --quiet -O "$destination" "$url"
+		then
+			zip_download_failed
+			false
+		fi
+
+		return
+	fi
+
+	if hash curl &>/dev/null
+	then
+		if ! curl --output /dev/null --head --silent --fail "$url"
+		then
+			os_not_supported
+			false
+
+			return
+		fi
+
+		if ! curl -sSL --output "$destination" "$url"
+		then
+			zip_download_failed
+			false
+		fi
+
+		return
+	fi
+
+	false
+}
+
+function extract_archive
+{
+	declare -r zip_file="$1"
+	declare -r destination="$2"
+	declare    subdir=""
+
+	unzip -qq "$zip_file" -d "$destination"
+	subdir="$destination"/"$(ls -1 "$destination")"
+
+	mv "$subdir"/{*,.[!.]*} "$destination"
+	rmdir "$subdir"
+}
+
+function run_script
+{
+	declare -r executable="$1"
+	declare -r branch_url="$2"
+
+	if ! [[ -f "$executable" ]]
+	then
+		>&2 cat <<EOF
+The branch '$branch_url' corresponding to your operating system version is not working.
+It should contain an 'all' script in the root dir.
+Please open an issue on github
+EOF
+		false
+
+		return
+	fi
+
+	/usr/bin/env bash "$executable"
+}
+
+main
