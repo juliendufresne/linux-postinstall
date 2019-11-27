@@ -9,21 +9,35 @@ IFS=$'\n\t'
 declare TMP_DIR=""
 declare ZIP_FILE=""
 
-function clean_workspace
+function clean_temporary_content
 {
+    # do not quit until it's done
+    trap '' EXIT INT TERM
+
+    declare exit_code=${1:-0}
+
     if [[ -n "$TMP_DIR" ]] && [[ -d "$TMP_DIR" ]]
     then
-        rm -r "$TMP_DIR"
+        rm -r "$TMP_DIR" || true
     fi
 
     if [[ -f "$ZIP_FILE" ]]
     then
-    	rm "$ZIP_FILE"
+        rm "$ZIP_FILE" || true
     fi
+
+    return $exit_code
+}
+function handle_signal
+{
+    declare exit_code=$?
+    trap '' EXIT
+    >&2 printf "Cleaning temporary content...\n"
+    clean_temporary_content $exit_code
 }
 
-# using this is prettier/cleaner than removing the directory at the end because many errors can occurs
-trap clean_workspace EXIT
+trap clean_temporary_content EXIT
+trap handle_signal INT QUIT TERM
 
 function os_not_supported
 {
